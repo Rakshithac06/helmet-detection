@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hard Hat Detection</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 30px auto; padding: 0 16px; background: #0f172a; color: #e2e8f0; }
+    h1 { margin-bottom: 4px; }
+    .note { color: #94a3b8; font-size: 14px; margin-bottom: 20px; }
+    .controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+    button { background: #22c55e; border: 0; color: #052e16; padding: 10px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: wait; }
+    canvas { max-width: 100%; border-radius: 8px; background: #1e293b; }
+    #summary { margin-top: 12px; font-size: 15px; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>Hard Hat Detection</h1>
+  <p class="note">YOLOv8n trained on construction-site and motorcycle/cycling helmet images. Detects helmet vs. no_helmet. Known limitations: may confuse caps with helmets, and struggles with product shots and very small or distant heads.</p>
+
+  <div class="controls">
+    <input type="file" id="file" accept="image/*">
+    <label>Confidence: <span id="confVal">0.35</span>
+      <input type="range" id="conf" min="0.1" max="0.9" step="0.05" value="0.35">
+    </label>
+    <button id="go">Detect</button>
+  </div>
+
+  <canvas id="canvas"></canvas>
+  <div id="summary"></div>
+
+  <script>
+    const fileInput = document.getElementById("file");
+    const confInput = document.getElementById("conf");
+    const confVal = document.getElementById("confVal");
+    const goBtn = document.getElementById("go");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const summary = document.getElementById("summary");
+    const COLORS = { helmet: "#22c55e", no_helmet: "#ef4444" };
+    let currentImage = null;
+
+    confInput.oninput = () => confVal.textContent = confInput.value;
+
+    fileInput.onchange = () => {
+      const f = fileInput.files[0];
+      if (!f) return;
+      const img = new Image();
+      img.onload = () => { currentImage = img; drawImage(img); summary.textContent = ""; };
+      img.src = URL.createObjectURL(f);
+    };
+
+    function drawImage(img) {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+    }
+
+    function drawBoxes(dets) {
+      const lw = Math.max(2, Math.round(canvas.width / 250));
+      const fs = Math.max(12, Math.round(canvas.width / 45));
+      ctx.lineWidth = lw;
+      ctx.font = `bold ${fs}px sans-serif`;
+      for (const d of dets) {
+        const [x1, y1, x2, y2] = d.box;
+        const color = COLORS[d.label] || "#38bdf8";
+        ctx.strokeStyle = color;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        const text = `${d.label} ${d.confidence.toFixed(2)}`;
+        const w = ctx.measureText(text).width + 8;
+        ctx.fillStyle = color;
+        ctx.fillRect(x1, Math.max(0, y1 - fs - 4), w, fs + 4);
+        ctx.fillStyle = "#000";
+        ctx.fillText(text, x1 + 4, Math.max(fs, y1 - 6));
+      }
+    }
+
+    goBtn.onclick = async () => {
+      const f = fileInput.files[0];
+      if (!f) { summary.innerHTML = '<span class="err">Choose an image first.</span>'; return; }
+      goBtn.disabled = true;
+      summary.textContent = "Detecting...";
+      const form = new FormData();
+      form.append("file", f);
+      form.append("conf", confInput.value);
+      try {
+        const res = await fetch("/predict", { method: "POST", body: form });
+        if (!res.ok) throw new Error((await res.json()).detail || "Request failed");
+        const data = await res.json();
+        drawImage(currentImage);
+        drawBoxes(data.detections);
+        const counts = {};
+        data.detections.forEach(d => counts[d.label] = (counts[d.label] || 0) + 1);
+        summary.textContent = data.detections.length
+          ? "Found: " + Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ")
+          : "No detections. Try lowering the confidence.";
+      } catch (e) {
+        summary.innerHTML = `<span class="err">Error: ${e.message}</span>`;
+      } finally {
+        goBtn.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>
